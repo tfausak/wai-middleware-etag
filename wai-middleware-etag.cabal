@@ -24,7 +24,12 @@ description:            WAI middleware that attaches ETags to responses for stat
                         This middleware only calculates ETag checksums for file smaller than 1MB,
                         otherwise it attaches a last-modified tag to the response.
                         .
+                        The package is heavily influenced by wai-app-static.
+                        .
                         [WAI] <http://hackage.haskell.org/package/wai>
+                        .
+                        [wai-app-static] <http://hackage.haskell.org/package/wai-app-static>
+
 
 extra-source-files:     src/Network/Wai/Middleware/ETag.hs
     
