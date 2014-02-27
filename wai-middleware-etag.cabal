@@ -2,7 +2,7 @@ name:                   wai-middleware-etag
 version:                0.1.0.0
 synopsis:               WAI ETag middleware for static files
 homepage:               https://github.com/ameingast/wai-middleware-etag
-Bug-reports:            https://github.com/ameingast/wai-middleware-etag
+Bug-reports:            https://github.com/ameingast/wai-middleware-etag/issues
 license:                BSD3
 license-file:           LICENSE
 author:                 Andreas Meingast <ameingast@gmail.com>
