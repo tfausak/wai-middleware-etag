@@ -1,5 +1,5 @@
 name:                   wai-middleware-etag
-version:                0.1.0.0
+version:                2.1.0.0
 synopsis:               WAI ETag middleware for static files
 homepage:               https://github.com/ameingast/wai-middleware-etag
 Bug-reports:            https://github.com/ameingast/wai-middleware-etag/issues
@@ -52,4 +52,4 @@ library
                         http-types              >= 0.8      && < 0.9,
                         unix-compat             >= 0.4      && < 0.5,
                         unordered-containers    >= 0.2      && < 0.3,
-                        wai                     >= 2.0.0    && < 2.1
+                        wai                     >= 2.1      && < 2.2
