@@ -31,41 +31,41 @@ import           System.Posix.Types       (EpochTime)
 import           System.PosixCompat.Files (fileSize, getFileStatus,
                                            modificationTime)
 
--- | Attaches the middleware. Enable caching if the first argument is 'True'.
-etag :: Bool -> MaxAge -> Middleware
-etag useCache age app req = do
-    c <- liftM (ETagContext useCache) (newMVar M.empty)
-    etag' c age app req
-
 -- | Attaches the middleware with a provided context.
-etag' :: ETagContext -> MaxAge -> Middleware
-etag' cache age app req =
-    app req >>= \response -> case response of
+etag :: ETagContext -> MaxAge -> Middleware
+etag cache age app req sendResponse =
+    app req $ \response -> case response of
         rf@(ResponseFile _ _ path _) -> do
             r <- hashFileCached cache path
 
             case (r, lookup "if-none-match" $ requestHeaders req) of
                 (Hash h, Just rh) | h == rh ->
-                    return $ addCacheControl age $ responseLBS status304 [] ""
+                    sendResponse $ addCacheControl age $ responseLBS status304 [] ""
 
-                (Hash h, _) ->
-                    respond age rf [("ETag", h)]
+                (Hash h, _) -> do
+                    zz <- respond age rf [("ETag", h)]
+                    sendResponse zz
 
                 (FileNotFound, _) ->
-                    return rf
+                    sendResponse rf
 
                 (FileTooBig, _) -> do
                     modTime <- getModificationTimeIfExists path
 
                     case (fmap epochTimeToHTTPDate modTime, modifiedSince req) of
                         (Just mdate, Just lastSent) | mdate == lastSent ->
-                            return $ addCacheControl age $ responseLBS status304 [] ""
+                            sendResponse $ addCacheControl age $ responseLBS status304 [] ""
                         (Just mdate, _) ->
-                            respond  age rf [("last-modified", formatHTTPDate mdate)]
+                            respond age rf [("last-modified", formatHTTPDate mdate)] >>= sendResponse
                         (Nothing, _) ->
-                            respond age rf []
+                            respond age rf [] >>= sendResponse
         x ->
-            return x
+            sendResponse x
+
+-- | Attaches the middleware without caching the calculated ETags.
+etagWithoutCache :: MaxAge -> Middleware
+etagWithoutCache age app req sendResponse =
+    emptyETagContext False >>= \ctx -> etag ctx age app req sendResponse
 
 -- | Finalize the response by attaching a cache-control header based on age.
 respond :: Monad m => MaxAge -> Response -> [Header] -> m Response
@@ -84,8 +84,10 @@ addCacheControl age res =
             ResponseFile st (cacheControl age hs) path part
         (ResponseBuilder st hs b) ->
             ResponseBuilder st (cacheControl age hs) b
-        (ResponseSource st hs s) ->
-            ResponseSource st (cacheControl age hs) s
+        (ResponseStream st hs body) ->
+            ResponseStream st (cacheControl age hs) body
+        (ResponseRaw bs f) ->
+            ResponseRaw bs f
 
 -- | Determine if-modified-since tag from the http request if present.
 modifiedSince :: Request -> Maybe HTTPDate
@@ -152,6 +154,11 @@ getModificationTimeIfExists fp = do
     return $ case res of
         Left (_ :: SomeException) -> Nothing
         Right x -> Just x
+
+-- | Create an empty 'ETagContext'.
+emptyETagContext :: Bool -> IO ETagContext
+emptyETagContext useCache =
+    liftM (ETagContext useCache) (newMVar M.empty)
 
 -- | Maximum age that will be attached to all file-resources
 -- processed by the middleware.
