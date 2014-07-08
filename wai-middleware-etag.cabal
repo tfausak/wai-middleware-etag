@@ -1,5 +1,5 @@
 name:                   wai-middleware-etag
-version:                3.0.0.0
+version:                3.0.1.0
 synopsis:               WAI ETag middleware for static files
 homepage:               https://github.com/ameingast/wai-middleware-etag
 Bug-reports:            https://github.com/ameingast/wai-middleware-etag/issues
@@ -11,15 +11,15 @@ category:               Web
 stability:              experimental
 build-type:             Simple
 cabal-version:          >= 1.8
-description:            WAI middleware that attaches ETags to responses for static files
-                        if they exist. 
+description:            WAI middleware that attaches ETags to responses for static files.
+
                         .
-                        Caveats: 
+                        Caveats:
                         .
                         If caching is turned on, the middleware caches calculated checksums
-                        aggressively in a synchronized hashmap; checksums are calculated only 
-                        once, so changes on the file-system are not reflected until the server 
-                        is restarted. 
+                        aggressively in a synchronized hashmap; checksums are calculated only
+                        once, so changes on the file-system are not reflected until the server
+                        is restarted.
                         .
                         This middleware only calculates ETag checksums for file smaller than 1MB,
                         otherwise it attaches a last-modified tag to the response.
@@ -32,7 +32,7 @@ description:            WAI middleware that attaches ETags to responses for stat
 
 
 extra-source-files:     src/Network/Wai/Middleware/ETag.hs
-    
+
 source-repository head
     type:               git
     location:           git://github.com/ameingast/wai-middleware-etag.git
@@ -42,7 +42,7 @@ library
     hs-source-dirs:     src
     ghc-options:        -Wall -fwarn-tabs -fwarn-incomplete-uni-patterns
     extensions:         OverloadedStrings
-    build-depends:      
+    build-depends:
                         base                    >= 4.6      && < 5,
                         base64-bytestring       >= 1.0      && < 1.1,
                         bytestring              >= 0.10     && < 0.11,

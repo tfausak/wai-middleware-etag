@@ -13,9 +13,9 @@
 
 module Network.Wai.Middleware.ETag where
 
-import           Control.Concurrent.MVar  (MVar, newMVar, takeMVar)
+import           Control.Concurrent.MVar  (MVar, newMVar, takeMVar, putMVar)
 import           Control.Exception        (SomeException, try)
-import           Control.Monad            (liftM)
+import           Control.Monad            (liftM )
 import           Crypto.Hash.MD5          as MD5
 import qualified Data.ByteString          as BS (ByteString, readFile)
 import qualified Data.ByteString.Base64   as B64
@@ -33,18 +33,17 @@ import           System.PosixCompat.Files (fileSize, getFileStatus,
 
 -- | Attaches the middleware with a provided context.
 etag :: ETagContext -> MaxAge -> Middleware
-etag cache age app req sendResponse =
+etag ctx age app req sendResponse =
     app req $ \response -> case response of
         rf@(ResponseFile _ _ path _) -> do
-            r <- hashFileCached cache path
+            r <- hashFileCached ctx path
 
             case (r, lookup "if-none-match" $ requestHeaders req) of
                 (Hash h, Just rh) | h == rh ->
                     sendResponse $ addCacheControl age $ responseLBS status304 [] ""
 
-                (Hash h, _) -> do
-                    zz <- respond age rf [("ETag", h)]
-                    sendResponse zz
+                (Hash h, _) ->
+                    respond age rf [("ETag", h)] >>= sendResponse
 
                 (FileNotFound, _) ->
                     sendResponse rf
@@ -98,16 +97,20 @@ modifiedSince req =
 -- If caching is enabled, use the cached checksum, otherwise
 -- always re-calculate.
 hashFileCached :: ETagContext -> FilePath -> IO HashResult
-hashFileCached ctx path =
-    if etagCtxUseCache ctx
-        then
-            liftM (M.lookup path) (takeMVar $ etagCtxCache ctx) >>= \r-> case r of
-                Just cachedHash ->
-                    return $ Hash cachedHash
-                Nothing ->
-                    hashFile path
-        else
-            hashFile path
+hashFileCached (ETagContext False _ ) path = hashFile path
+hashFileCached (ETagContext True cache) path =
+    liftM (M.lookup path) (takeMVar cache) >>= \r-> case r of
+        Just cachedHash ->
+            return $ Hash cachedHash
+        Nothing ->
+            hashFile path >>= \hr -> case hr of
+                Hash h ->
+                    updateCache h >> return hr
+                _ ->
+                    return hr
+    where
+        updateCache checksum =
+            takeMVar cache >>= putMVar cache . M.insert path checksum
 
 -- | Add cache-control to the provided response-headears.
 cacheControl :: MaxAge -> ResponseHeaders -> ResponseHeaders
@@ -175,10 +178,12 @@ data HashResult
     | FileNotFound
     deriving (Show, Eq, Ord, Read)
 
+type ChecksumCache = MVar (M.HashMap FilePath BS.ByteString)
+
 -- | The configuration context of the middleware.
 data ETagContext = ETagContext
     { etagCtxUseCache :: !Bool
     -- ^ Set to false to disable the cache
-    , etagCtxCache    :: !(MVar (M.HashMap FilePath BS.ByteString))
+    , etagCtxCache    :: !ChecksumCache
     -- ^ The underlying store mapping filepaths to calculated checksums
     } deriving (Eq)
