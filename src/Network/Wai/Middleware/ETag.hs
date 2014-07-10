@@ -11,19 +11,26 @@
 --
 -- WAI ETag middleware for static files.
 
-module Network.Wai.Middleware.ETag where
+module Network.Wai.Middleware.ETag
+    ( etag
+    , etagWithoutCache
+    , defaultETagContext
+    , ETagContext(..)
+    , MaxAge
+    , ChecksumCache
+    ) where
 
-import           Control.Concurrent.MVar  (MVar, newMVar, takeMVar, putMVar)
+import           Control.Concurrent.MVar  (MVar, newMVar, putMVar, takeMVar)
 import           Control.Exception        (SomeException, try)
-import           Control.Monad            (liftM )
-import           Crypto.Hash.MD5          as MD5
+import           Control.Monad            (liftM)
+import qualified Crypto.Hash.MD5          as MD5 (hash)
 import qualified Data.ByteString          as BS (ByteString, readFile)
-import qualified Data.ByteString.Base64   as B64
-import qualified Data.ByteString.Char8    as BS8
-import qualified Data.HashMap.Strict      as M
+import qualified Data.ByteString.Base64   as B64 (encode)
+import qualified Data.ByteString.Char8    as BS8 (append, pack)
+import qualified Data.HashMap.Strict      as M (HashMap, empty, insert, lookup)
 import           Network.HTTP.Date        (HTTPDate, epochTimeToHTTPDate,
                                            formatHTTPDate, parseHTTPDate)
-import           Network.HTTP.Types       (Header, ResponseHeaders, status304)
+import           Network.HTTP.Types       (Header, status304)
 import           Network.Wai              (Middleware, requestHeaders,
                                            responseLBS)
 import           Network.Wai.Internal     (Request (..), Response (..))
@@ -64,7 +71,7 @@ etag ctx age app req sendResponse =
 -- | Attaches the middleware without caching the calculated ETags.
 etagWithoutCache :: MaxAge -> Middleware
 etagWithoutCache age app req sendResponse =
-    emptyETagContext False >>= \ctx -> etag ctx age app req sendResponse
+    defaultETagContext False >>= \ctx -> etag ctx age app req sendResponse
 
 -- | Finalize the response by attaching a cache-control header based on age.
 respond :: Monad m => MaxAge -> Response -> [Header] -> m Response
@@ -80,13 +87,35 @@ addCacheControl :: MaxAge -> Response -> Response
 addCacheControl age res =
     case res of
         (ResponseFile st hs path part) ->
-            ResponseFile st (cacheControl age hs) path part
+            ResponseFile st (modifyHeaders age hs) path part
         (ResponseBuilder st hs b) ->
-            ResponseBuilder st (cacheControl age hs) b
+            ResponseBuilder st (modifyHeaders age hs) b
         (ResponseStream st hs body) ->
-            ResponseStream st (cacheControl age hs) body
+            ResponseStream st (modifyHeaders age hs) body
         (ResponseRaw bs f) ->
             ResponseRaw bs f
+    where
+        modifyHeaders maxage =
+            headerCacheControl maxage . headerExpires maxage
+
+        headerCacheControl maxage = case maxage of
+            NoMaxAge ->
+                id
+            MaxAgeSeconds i ->
+                (:) ("Cache-Control", BS8.append "public, max-age=" $ bsShow i)
+            MaxAgeForever ->
+                modifyHeaders (MaxAgeSeconds (60 * 60 * 24 * 365))
+
+        headerExpires maxage = case maxage of
+            NoMaxAge ->
+                id
+            MaxAgeSeconds i ->
+                (:) ("Expires", bsShow $ epochTimeToHTTPDate $ fromIntegral i)
+            MaxAgeForever ->
+                headerExpires (MaxAgeSeconds (60 * 60 * 24 * 365))
+
+        bsShow :: Show a => a -> BS.ByteString
+        bsShow = BS8.pack . show
 
 -- | Determine if-modified-since tag from the http request if present.
 modifiedSince :: Request -> Maybe HTTPDate
@@ -97,13 +126,13 @@ modifiedSince req =
 -- If caching is enabled, use the cached checksum, otherwise
 -- always re-calculate.
 hashFileCached :: ETagContext -> FilePath -> IO HashResult
-hashFileCached (ETagContext False _ ) path = hashFile path
-hashFileCached (ETagContext True cache) path =
+hashFileCached (ETagContext False size _) path = hashFile path size
+hashFileCached (ETagContext True size cache) path =
     liftM (M.lookup path) (takeMVar cache) >>= \r-> case r of
         Just cachedHash ->
             return $ Hash cachedHash
         Nothing ->
-            hashFile path >>= \hr -> case hr of
+            hashFile path size >>= \hr -> case hr of
                 Hash h ->
                     updateCache h >> return hr
                 _ ->
@@ -112,33 +141,12 @@ hashFileCached (ETagContext True cache) path =
         updateCache checksum =
             takeMVar cache >>= putMVar cache . M.insert path checksum
 
--- | Add cache-control to the provided response-headears.
-cacheControl :: MaxAge -> ResponseHeaders -> ResponseHeaders
-cacheControl maxage =
-    headerCacheControl . headerExpires
-    where
-        headerCacheControl = case maxage of
-            NoMaxAge ->
-                id
-            MaxAgeSeconds i ->
-                (:) ("Cache-Control", BS8.append "public, max-age=" $ BS8.pack $ show i)
-            MaxAgeForever ->
-                cacheControl (MaxAgeSeconds (60 * 60 * 24 * 365))
-
-        headerExpires = case maxage of
-            NoMaxAge ->
-                id
-            MaxAgeSeconds _ ->
-                id -- FIXME
-            MaxAgeForever ->
-                (:) ("Expires", "Thu, 31 Dec 2037 23:55:55 GMT")
-
 -- | Hash the file with MD5 located at 'fp'.
-hashFile :: FilePath -> IO HashResult
-hashFile fp = do
-    size <- liftM fileSize (getFileStatus fp)
+hashFile :: FilePath -> Integer -> IO HashResult
+hashFile fp size = do
+    fs <- liftM fileSize (getFileStatus fp)
 
-    if size < 1024 * 1024
+    if fs <= fromIntegral size
         then do
             res <- try $ liftM (B64.encode . MD5.hash) (BS.readFile fp)
 
@@ -159,9 +167,9 @@ getModificationTimeIfExists fp = do
         Right x -> Just x
 
 -- | Create an empty 'ETagContext'.
-emptyETagContext :: Bool -> IO ETagContext
-emptyETagContext useCache =
-    liftM (ETagContext useCache) (newMVar M.empty)
+defaultETagContext :: Bool -> IO ETagContext
+defaultETagContext useCache =
+    liftM (ETagContext useCache (1024 * 1024 * 16)) (newMVar M.empty)
 
 -- | Maximum age that will be attached to all file-resources
 -- processed by the middleware.
@@ -183,7 +191,10 @@ type ChecksumCache = MVar (M.HashMap FilePath BS.ByteString)
 -- | The configuration context of the middleware.
 data ETagContext = ETagContext
     { etagCtxUseCache :: !Bool
-    -- ^ Set to false to disable the cache
+    -- ^ Set to false to disable the cache.
+    , etagCtxMaxSize  :: !Integer
+    -- ^ File size in bytes. If files are bigger than 'etagCtxMaxSize',
+    -- no etag will be calculated.
     , etagCtxCache    :: !ChecksumCache
-    -- ^ The underlying store mapping filepaths to calculated checksums
+    -- ^ The underlying store mapping filepaths to calculated checksums.
     } deriving (Eq)

@@ -1,5 +1,5 @@
 name:                   wai-middleware-etag
-version:                3.0.1.0
+version:                0.1.1.0
 synopsis:               WAI ETag middleware for static files
 homepage:               https://github.com/ameingast/wai-middleware-etag
 Bug-reports:            https://github.com/ameingast/wai-middleware-etag/issues
