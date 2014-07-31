@@ -16,11 +16,11 @@ module Network.Wai.Middleware.ETag
     , etagWithoutCache
     , defaultETagContext
     , ETagContext(..)
-    , MaxAge
+    , MaxAge(..)
     , ChecksumCache
     ) where
 
-import           Control.Concurrent.MVar  (MVar, newMVar, putMVar, takeMVar)
+import           Control.Concurrent.MVar  (MVar, newMVar, readMVar, modifyMVar_)
 import           Control.Exception        (SomeException, try)
 import           Control.Monad            (liftM)
 import qualified Crypto.Hash.MD5          as MD5 (hash)
@@ -102,20 +102,17 @@ addCacheControl age res =
             NoMaxAge ->
                 id
             MaxAgeSeconds i ->
-                (:) ("Cache-Control", BS8.append "public, max-age=" $ bsShow i)
+                (:) ("Cache-Control", BS8.append "public, max-age=" $ BS8.pack $ show i)
             MaxAgeForever ->
-                modifyHeaders (MaxAgeSeconds (60 * 60 * 24 * 365))
+                headerCacheControl (MaxAgeSeconds (60 * 60 * 24 * 365 * 100))
 
         headerExpires maxage = case maxage of
             NoMaxAge ->
                 id
             MaxAgeSeconds i ->
-                (:) ("Expires", bsShow $ epochTimeToHTTPDate $ fromIntegral i)
+                (:) ("Expires", formatHTTPDate $ epochTimeToHTTPDate $ fromIntegral i)
             MaxAgeForever ->
-                headerExpires (MaxAgeSeconds (60 * 60 * 24 * 365))
-
-        bsShow :: Show a => a -> BS.ByteString
-        bsShow = BS8.pack . show
+                headerExpires (MaxAgeSeconds (60 * 60 * 24 * 365 * 100))
 
 -- | Determine if-modified-since tag from the http request if present.
 modifiedSince :: Request -> Maybe HTTPDate
@@ -128,18 +125,16 @@ modifiedSince req =
 hashFileCached :: ETagContext -> FilePath -> IO HashResult
 hashFileCached (ETagContext False size _) path = hashFile path size
 hashFileCached (ETagContext True size cache) path =
-    liftM (M.lookup path) (takeMVar cache) >>= \r-> case r of
+    liftM (M.lookup path) (readMVar cache) >>= \r -> case r of
         Just cachedHash ->
             return $ Hash cachedHash
         Nothing ->
             hashFile path size >>= \hr -> case hr of
-                Hash h ->
-                    updateCache h >> return hr
+                Hash h -> do
+                    modifyMVar_ cache (return . M.insert path h)
+                    return hr
                 _ ->
                     return hr
-    where
-        updateCache checksum =
-            takeMVar cache >>= putMVar cache . M.insert path checksum
 
 -- | Hash the file with MD5 located at 'fp'.
 hashFile :: FilePath -> Integer -> IO HashResult
