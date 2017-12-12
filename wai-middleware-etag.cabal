@@ -52,4 +52,4 @@ library
                         http-types              >= 0.8      && < 0.12,
                         unix-compat             >= 0.4      && < 0.6,
                         unordered-containers    >= 0.2      && < 0.3,
-                        wai                     >= 3.0      && < 3.1
+                        wai                     >= 3.0      && < 3.3
